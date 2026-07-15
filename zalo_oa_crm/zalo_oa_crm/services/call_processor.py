@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-
+from frappe.utils.file_manager import save_file
 import ipaddress
 import json
 import mimetypes
@@ -167,13 +167,31 @@ def process_call_log(
                 transcript=None,
             )
 
-
             audio_path, is_temporary = _resolve_audio_source(doc)
-
 
             if is_temporary:
                 temporary_path = audio_path
 
+                # Lưu file tải từ URL thành File private trong Frappe.
+                file_url = _save_remote_audio(
+                    call_log_name=doc.name,
+                    local_path=audio_path,
+                    original_url=doc.audio_url,
+                )
+
+                _set_fields(
+                    doc.name,
+                    {
+                        "audio_file": file_url,
+                    },
+                    commit=True,
+                )
+
+                _set_crm_recording_url(
+                    call_log_name=doc.name,
+                    file_url=file_url,
+                    commit=True,
+                )
 
             transcript_result = transcribe_audio(audio_path)
             transcript = _extract_transcript(transcript_result)
@@ -354,7 +372,67 @@ def _resolve_audio_source(doc: Any) -> Tuple[str, bool]:
     raise AssertionError("unreachable")
 
 
+def _save_remote_audio(
+    call_log_name: str,
+    local_path: str,
+    original_url: Optional[str] = None,
+) -> str:
+    """Lưu file tải từ URL thành File private trong Frappe."""
+    path = Path(local_path)
 
+    filename = Path(
+        urlparse(original_url or "").path
+    ).name
+
+    if not filename:
+        filename = "call-recording{0}".format(
+            path.suffix or ".media"
+        )
+
+    with path.open("rb") as file_handle:
+        content = file_handle.read()
+
+    file_doc = save_file(
+        fname=filename,
+        content=content,
+        dt=DOCTYPE,
+        dn=call_log_name,
+        is_private=1,
+    )
+
+    return file_doc.file_url
+
+
+def _set_crm_recording_url(
+    call_log_name: str,
+    file_url: str,
+    commit: bool = False,
+) -> None:
+    """Đưa file ghi âm private sang CRM Call Log."""
+    crm_call_log_name = _get_linked_crm_call_log(
+        call_log_name
+    )
+
+    if not crm_call_log_name:
+        return
+
+    meta = frappe.get_meta(
+        CRM_CALL_LOG_DOCTYPE
+    )
+
+    if not meta.has_field("recording_url"):
+        return
+
+    frappe.db.set_value(
+        CRM_CALL_LOG_DOCTYPE,
+        crm_call_log_name,
+        "recording_url",
+        file_url,
+        update_modified=True,
+    )
+
+    if commit:
+        frappe.db.commit()
 
 def _resolve_frappe_file(file_url: str) -> str:
     """Tìm đường dẫn vật lý của File document trong Frappe."""

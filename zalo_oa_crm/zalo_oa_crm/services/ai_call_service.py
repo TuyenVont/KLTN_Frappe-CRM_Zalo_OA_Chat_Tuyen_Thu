@@ -159,13 +159,12 @@ def transcribe_audio(file_path: str) -> str:
 
 
     segments, info = model.transcribe(
-        str(audio_path),
-        language="vi",
-        beam_size=5,
-        vad_filter=True,
-        condition_on_previous_text=True,
-    )
-
+    str(audio_path),
+    language=None,
+    beam_size=5,
+    vad_filter=False,
+    condition_on_previous_text=True,
+)
 
     transcript_parts: list[str] = []
 
@@ -513,31 +512,20 @@ def _create_summary_completion(
     for attempt in range(1, max_attempts + 1):
         try:
             response = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": system_prompt,
-                    },
-                    {
-                        "role": "user",
-                        "content": user_prompt,
-                    },
-                ],
-                temperature=0.1,
-                max_completion_tokens=1600,
-                extra_body={
-                    "reasoning": {
-                        "effort": "none",
-                    },
-                    "provider": {
-                        "only": [
-                            "google-ai-studio",
-                        ],
-                        "allow_fallbacks": False,
-                    },
-                },
-            )
+    model=model,
+    messages=[
+        {
+            "role": "system",
+            "content": system_prompt,
+        },
+        {
+            "role": "user",
+            "content": user_prompt,
+        },
+    ],
+    temperature=0.1,
+    max_completion_tokens=1600,
+)
 
 
             if _completion_has_content(response):
