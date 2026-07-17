@@ -12,12 +12,12 @@ from zalo_oa_crm.services.call_processor import enqueue_call_log
 
 
 CRM_CALL_LOG_DOCTYPE = "CRM Call Log"
-AI_CALL_LOG_DOCTYPE = "Zalo OA Call Log"
 
 
 VALID_SOURCES = {
     "manual": "Manual",
     "zalo": "Zalo",
+    "zalo oa": "Zalo",
     "facebook": "Facebook",
     "tiktok": "TikTok",
     "phone system": "Phone System",
@@ -30,14 +30,6 @@ CRM_TYPE_MAP = {
     "inbound": "Incoming",
     "outgoing": "Outgoing",
     "outbound": "Outgoing",
-}
-
-
-AI_DIRECTION_MAP = {
-    "incoming": "Inbound",
-    "inbound": "Inbound",
-    "outgoing": "Outbound",
-    "outbound": "Outbound",
 }
 
 
@@ -70,7 +62,7 @@ def _normalize_select(
     value: Any,
     default: Optional[str] = None,
 ) -> Optional[str]:
-    """Trả về giá trị Select hợp lệ theo metadata."""
+    """Trả về giá trị Select hợp lệ theo metadata của DocType."""
     text = _clean_text(value)
     options = _get_select_options(
         doc,
@@ -80,16 +72,17 @@ def _normalize_select(
     if not options:
         return text or default
 
-    for option in options:
-        if option.casefold() == text.casefold():
-            return option
+    if text:
+        for option in options:
+            if option.casefold() == text.casefold():
+                return option
 
     if default:
         for option in options:
             if option.casefold() == default.casefold():
                 return option
 
-    return options[0] if options else None
+    return None
 
 
 def _resolve_user(value: Any) -> Optional[str]:
@@ -122,9 +115,10 @@ def set_if_exists(
     doc: Any,
     fieldname: str,
     value: Any,
+    default: Optional[str] = None,
 ) -> None:
-    """Chỉ gán field tồn tại và bỏ qua Link không hợp lệ."""
-    if value in (None, ""):
+    """Chỉ gán khi field tồn tại và giá trị hợp lệ."""
+    if value in (None, "") and default in (None, ""):
         return
 
     field = doc.meta.get_field(fieldname)
@@ -152,6 +146,7 @@ def set_if_exists(
             doc,
             fieldname,
             value,
+            default=default,
         )
 
         if not resolved_value:
@@ -160,6 +155,24 @@ def set_if_exists(
     doc.set(
         fieldname,
         resolved_value,
+    )
+
+
+def _db_set_if_exists(
+    doc: Any,
+    fieldname: str,
+    value: Any,
+    *,
+    update_modified: bool = False,
+) -> None:
+    """Cập nhật trực tiếp một field nếu field đó tồn tại."""
+    if not doc.meta.has_field(fieldname):
+        return
+
+    doc.db_set(
+        fieldname,
+        value,
+        update_modified=update_modified,
     )
 
 
@@ -181,18 +194,6 @@ def _normalize_call_type(value: Any) -> str:
     )
 
 
-def _normalize_direction(
-    value: Any,
-    call_type: str,
-) -> str:
-    text = _clean_text(value) or call_type
-
-    return AI_DIRECTION_MAP.get(
-        text.casefold(),
-        "Outbound",
-    )
-
-
 def _get_max_file_bytes() -> int:
     max_mb = max(
         cint(
@@ -207,28 +208,103 @@ def _get_max_file_bytes() -> int:
     return max_mb * 1024 * 1024
 
 
+def _validate_audio_url(audio_url: str) -> None:
+    if not audio_url:
+        return
+
+    parsed_url = urlparse(audio_url)
+
+    if (
+        parsed_url.scheme not in {"http", "https"}
+        or not parsed_url.hostname
+    ):
+        frappe.throw(
+            _("Audio URL không hợp lệ.")
+        )
+
+
 def _resolve_reference(
     crm_lead: str,
     crm_deal: str,
+    reference_doctype: str = "",
+    reference_docname: str = "",
 ) -> tuple[Optional[str], Optional[str]]:
-    """Kiểm tra và trả về cặp reference_doctype/reference_docname."""
+    """Trả về reference_doctype/reference_docname hợp lệ."""
     if crm_lead and crm_deal:
         frappe.throw(
             _("Chỉ được liên kết một trong hai: CRM Lead hoặc CRM Deal.")
         )
 
-    if crm_deal:
-        if not frappe.db.exists("CRM Deal", crm_deal):
+    if (
+        (reference_doctype and not reference_docname)
+        or (reference_docname and not reference_doctype)
+    ):
+        frappe.throw(
+            _(
+                "Phải cung cấp đồng thời reference_doctype "
+                "và reference_docname."
+            )
+        )
+
+    if reference_doctype and reference_docname:
+        if crm_lead or crm_deal:
             frappe.throw(
-                _("Không tìm thấy CRM Deal: {0}").format(crm_deal)
+                _(
+                    "Không gửi đồng thời crm_lead/crm_deal "
+                    "với reference_doctype/reference_docname."
+                )
+            )
+
+        if not frappe.db.exists(
+            "DocType",
+            reference_doctype,
+        ):
+            frappe.throw(
+                _("Không tìm thấy DocType: {0}").format(
+                    reference_doctype
+                )
+            )
+
+        if not frappe.db.exists(
+            reference_doctype,
+            reference_docname,
+        ):
+            frappe.throw(
+                _(
+                    "Không tìm thấy {0}: {1}"
+                ).format(
+                    reference_doctype,
+                    reference_docname,
+                )
+            )
+
+        return (
+            reference_doctype,
+            reference_docname,
+        )
+
+    if crm_deal:
+        if not frappe.db.exists(
+            "CRM Deal",
+            crm_deal,
+        ):
+            frappe.throw(
+                _("Không tìm thấy CRM Deal: {0}").format(
+                    crm_deal
+                )
             )
 
         return "CRM Deal", crm_deal
 
     if crm_lead:
-        if not frappe.db.exists("CRM Lead", crm_lead):
+        if not frappe.db.exists(
+            "CRM Lead",
+            crm_lead,
+        ):
             frappe.throw(
-                _("Không tìm thấy CRM Lead: {0}").format(crm_lead)
+                _("Không tìm thấy CRM Lead: {0}").format(
+                    crm_lead
+                )
             )
 
         return "CRM Lead", crm_lead
@@ -236,9 +312,55 @@ def _resolve_reference(
     return None, None
 
 
+def _get_existing_call_log(
+    external_call_id: str,
+) -> Optional[str]:
+    """Tìm CRM Call Log theo field id hoặc theo document name."""
+    name = frappe.db.get_value(
+        CRM_CALL_LOG_DOCTYPE,
+        {"id": external_call_id},
+        "name",
+    )
+
+    if name:
+        return name
+
+    if frappe.db.exists(
+        CRM_CALL_LOG_DOCTYPE,
+        external_call_id,
+    ):
+        return external_call_id
+
+    return None
+
+
 @frappe.whitelist()
 def ingest_call():
-    """Nhận multipart/form-data từ Postman và chạy pipeline AI."""
+    """
+    Nhận multipart/form-data và tạo/cập nhật duy nhất CRM Call Log.
+
+    Field file:
+        file
+
+    Các field form-data chính:
+        external_call_id
+        source
+        type
+        status
+        from_number
+        to_number
+        caller
+        receiver
+        start_time
+        end_time
+        duration_seconds
+        audio_url
+        crm_lead
+        crm_deal
+        reference_doctype
+        reference_docname
+        zalo_customer
+    """
     if frappe.request.method != "POST":
         frappe.throw(
             _("Chỉ hỗ trợ POST.")
@@ -246,16 +368,35 @@ def ingest_call():
 
     args = frappe.form_dict
     uploaded_file = frappe.request.files.get("file")
-    audio_url = _clean_text(args.get("audio_url"))
-    crm_lead = _clean_text(args.get("crm_lead"))
-    crm_deal = _clean_text(args.get("crm_deal"))
 
-    reference_doctype, reference_docname = _resolve_reference(
-        crm_lead=crm_lead,
-        crm_deal=crm_deal,
+    external_call_id = _clean_text(
+        args.get("external_call_id")
+    )
+    audio_url = _clean_text(
+        args.get("audio_url")
+    )
+    from_number = _clean_text(
+        args.get("from_number")
+    )
+    to_number = _clean_text(
+        args.get("to_number")
     )
 
-    # Chấp nhận một trong hai nguồn: file upload hoặc URL trực tiếp.
+    if not external_call_id:
+        frappe.throw(
+            _("Thiếu external_call_id.")
+        )
+
+    if not from_number:
+        frappe.throw(
+            _("Thiếu from_number.")
+        )
+
+    if not to_number:
+        frappe.throw(
+            _("Thiếu to_number.")
+        )
+
     if not uploaded_file and not audio_url:
         frappe.throw(
             _(
@@ -264,33 +405,35 @@ def ingest_call():
             )
         )
 
-    if audio_url:
-        parsed_url = urlparse(audio_url)
+    _validate_audio_url(audio_url)
 
-        if (
-            parsed_url.scheme not in {"http", "https"}
-            or not parsed_url.hostname
-        ):
-            frappe.throw(
-                _("Audio URL không hợp lệ.")
-            )
+    crm_lead = _clean_text(
+        args.get("crm_lead")
+    )
+    crm_deal = _clean_text(
+        args.get("crm_deal")
+    )
+    reference_doctype_input = _clean_text(
+        args.get("reference_doctype")
+    )
+    reference_docname_input = _clean_text(
+        args.get("reference_docname")
+    )
+
+    reference_doctype, reference_docname = _resolve_reference(
+        crm_lead=crm_lead,
+        crm_deal=crm_deal,
+        reference_doctype=reference_doctype_input,
+        reference_docname=reference_docname_input,
+    )
 
     call_type = _normalize_call_type(
         args.get("type")
     )
-
-    direction = _normalize_direction(
-        args.get("direction"),
-        call_type,
-    )
-
     source = _normalize_source(
         args.get("source")
     )
 
-    # caller và receiver là Link tới User.
-    # Nếu Postman gửi tên hiển thị hoặc giá trị sai,
-    # dùng User đang gọi API.
     default_user = (
         frappe.session.user
         if frappe.session.user != "Guest"
@@ -300,7 +443,6 @@ def ingest_call():
     caller_input = _clean_text(
         args.get("caller")
     )
-
     receiver_input = _clean_text(
         args.get("receiver")
     )
@@ -322,63 +464,65 @@ def ingest_call():
             )
         )
 
-    caller = caller or default_user
-    receiver = receiver or default_user
+    if call_type == "Incoming":
+        receiver = receiver or default_user
+    else:
+        caller = caller or default_user
 
-    # 1. Tạo CRM Call Log
-    crm_call = frappe.new_doc(
-        CRM_CALL_LOG_DOCTYPE
+    existing_name = _get_existing_call_log(
+        external_call_id
     )
+
+    if existing_name:
+        crm_call = frappe.get_doc(
+            CRM_CALL_LOG_DOCTYPE,
+            existing_name,
+        )
+        is_new = False
+    else:
+        crm_call = frappe.new_doc(
+            CRM_CALL_LOG_DOCTYPE
+        )
+        is_new = True
+
+        set_if_exists(
+            crm_call,
+            "id",
+            external_call_id,
+        )
 
     set_if_exists(
         crm_call,
         "type",
         call_type,
+        default="Outgoing",
     )
-
     set_if_exists(
         crm_call,
         "status",
         args.get("status") or "Completed",
+        default="Completed",
     )
-
     set_if_exists(
         crm_call,
         "from",
-        args.get("from_number"),
+        from_number,
     )
-
     set_if_exists(
         crm_call,
         "to",
-        args.get("to_number"),
+        to_number,
     )
-
-    set_if_exists(
-        crm_call,
-        "caller",
-        caller,
-    )
-
-    set_if_exists(
-        crm_call,
-        "receiver",
-        receiver,
-    )
-
     set_if_exists(
         crm_call,
         "start_time",
-        args.get("start_time")
-        or now_datetime(),
+        args.get("start_time") or now_datetime(),
     )
-
     set_if_exists(
         crm_call,
         "end_time",
         args.get("end_time"),
     )
-
     set_if_exists(
         crm_call,
         "duration",
@@ -388,12 +532,41 @@ def ingest_call():
         ),
     )
 
+    # Field medium của CRM Call Log lưu nguồn nghiệp vụ.
+    set_if_exists(
+        crm_call,
+        "medium",
+        source,
+    )
+
+    # telephony_medium là Select chuẩn của CRM.
+    # Dùng Manual để tránh lỗi nếu options chưa có Zalo.
     set_if_exists(
         crm_call,
         "telephony_medium",
-        args.get("telephony_medium")
-        or "Manual",
+        args.get("telephony_medium") or "Manual",
+        default="Manual",
     )
+
+    # Nếu bạn đã tạo custom_source thì hệ thống sẽ tự gán.
+    set_if_exists(
+        crm_call,
+        "custom_source",
+        source,
+    )
+
+    if call_type == "Incoming":
+        set_if_exists(
+            crm_call,
+            "receiver",
+            receiver,
+        )
+    else:
+        set_if_exists(
+            crm_call,
+            "caller",
+            caller,
+        )
 
     if (
         reference_doctype
@@ -405,18 +578,44 @@ def ingest_call():
             "reference_doctype",
             reference_doctype,
         )
-
         crm_call.set(
             "reference_docname",
             reference_docname,
         )
 
-    crm_call.insert()
+    zalo_customer = _clean_text(
+        args.get("zalo_customer")
+        or args.get("customer")
+    )
 
-    # 2. Nếu có file upload thì lưu file private vào Frappe.
-    # Nếu chỉ có audio_url thì worker sẽ tải URL ở bước xử lý AI.
+    set_if_exists(
+        crm_call,
+        "custom_zalo_customer",
+        zalo_customer,
+    )
+
+    if is_new:
+        set_if_exists(
+            crm_call,
+            "custom_ai_status",
+            "Pending",
+            default="Pending",
+        )
+        set_if_exists(
+            crm_call,
+            "custom_retry_count",
+            0,
+        )
+        crm_call.insert()
+    else:
+        crm_call.save()
+
     file_doc = None
-    recording_url = None
+    recording_url = _clean_text(
+        crm_call.get("recording_url")
+        if crm_call.meta.has_field("recording_url")
+        else ""
+    )
 
     if uploaded_file:
         uploaded_file.stream.seek(0)
@@ -455,153 +654,38 @@ def ingest_call():
         )
         recording_url = file_doc.file_url
 
-        if crm_call.meta.has_field(
-            "recording_url"
-        ):
-            crm_call.db_set(
-                "recording_url",
-                recording_url,
-                update_modified=False,
-            )
+    elif audio_url:
+        recording_url = audio_url
 
-    # 3. Tạo Zalo OA Call Log
-    ai_call = frappe.new_doc(
-        AI_CALL_LOG_DOCTYPE
-    )
-
-    if crm_lead:
-        set_if_exists(
-            ai_call,
-            "crm_lead",
-            crm_lead,
-        )
-
-    if crm_deal:
-        set_if_exists(
-            ai_call,
-            "crm_deal",
-            crm_deal,
-        )
-
-    set_if_exists(
-        ai_call,
-        "external_call_id",
-        args.get("external_call_id")
-        or crm_call.name,
-    )
-
-    set_if_exists(
-        ai_call,
-        "source",
-        source,
-    )
-
-    set_if_exists(
-        ai_call,
-        "direction",
-        direction,
-    )
-
-    set_if_exists(
-        ai_call,
-        "started_at",
-        args.get("start_time")
-        or now_datetime(),
-    )
-
-    set_if_exists(
-        ai_call,
-        "duration_seconds",
-        cint(
-            args.get("duration_seconds")
-            or 0
-        ),
-    )
-
-    agent = (
-        caller
-        if direction == "Outbound"
-        else receiver
-    )
-
-    set_if_exists(
-        ai_call,
-        "agent",
-        agent,
-    )
-
-    if file_doc:
-        set_if_exists(
-            ai_call,
-            "audio_file",
-            file_doc.file_url,
-        )
-    else:
-        set_if_exists(
-            ai_call,
-            "audio_url",
-            audio_url,
-        )
-
-    set_if_exists(
-        ai_call,
-        "processing_status",
-        "Pending",
-    )
-
-    if ai_call.meta.has_field(
-        "crm_call_log"
-    ):
-        ai_call.set(
-            "crm_call_log",
-            crm_call.name,
-        )
-
-    elif ai_call.meta.has_field(
-        "custom_crm_call_log"
-    ):
-        ai_call.set(
-            "custom_crm_call_log",
-            crm_call.name,
-        )
-
-    ai_call.insert()
-
-    # 4. Liên kết ngược sang CRM Call Log
-    if crm_call.meta.has_field(
-        "custom_ai_call_log"
-    ):
-        crm_call.db_set(
-            "custom_ai_call_log",
-            ai_call.name,
+    if recording_url:
+        _db_set_if_exists(
+            crm_call,
+            "recording_url",
+            recording_url,
             update_modified=False,
         )
 
-    if crm_call.meta.has_field(
-        "custom_ai_status"
-    ):
-        crm_call.db_set(
-            "custom_ai_status",
-            "Queued",
-            update_modified=False,
-        )
+    _db_set_if_exists(
+        crm_call,
+        "custom_error_message",
+        None,
+        update_modified=False,
+    )
 
-    # 5. Đưa vào background worker
     result = enqueue_call_log(
-        ai_call.name
+        crm_call.name
     )
 
     return {
         "ok": True,
+        "created": is_new,
         "crm_call_log": crm_call.name,
-        "ai_call_log": ai_call.name,
+        "external_call_id": external_call_id,
         "reference_doctype": reference_doctype,
         "reference_docname": reference_docname,
-        "recording_url": recording_url,
-        "audio_url": audio_url or None,
+        "recording_url": recording_url or None,
         "source": source,
         "type": call_type,
-        "direction": direction,
         "caller": caller,
         "receiver": receiver,
         "processing_status": result.get(
@@ -610,7 +694,7 @@ def ingest_call():
         ),
         "message": result.get(
             "message",
-            "Đã đưa cuộc gọi vào hàng đợi AI.",
+            "Đã đưa CRM Call Log vào hàng đợi AI.",
         ),
     }
 
@@ -620,19 +704,47 @@ def get_call_ai_details(
     call_log_name: Optional[str] = None,
     recording_url: Optional[str] = None,
 ):
-    """Lấy transcript và kết quả AI của CRM Call Log."""
-    call_log_name = _clean_text(call_log_name)
-    recording_url = _clean_text(recording_url)
+    """Lấy transcript và kết quả AI trực tiếp từ CRM Call Log."""
+    call_log_name = _clean_text(
+        call_log_name
+    )
+    recording_url = _clean_text(
+        recording_url
+    )
 
     if not call_log_name and recording_url:
-        parsed_path = unquote(
-            urlparse(recording_url).path
-        )
-
         call_log_name = (
             frappe.db.get_value(
                 CRM_CALL_LOG_DOCTYPE,
-                {"recording_url": parsed_path},
+                {"recording_url": recording_url},
+                "name",
+            )
+            or ""
+        )
+
+        if not call_log_name:
+            parsed_path = unquote(
+                urlparse(recording_url).path
+            )
+
+            if parsed_path:
+                call_log_name = (
+                    frappe.db.get_value(
+                        CRM_CALL_LOG_DOCTYPE,
+                        {"recording_url": parsed_path},
+                        "name",
+                    )
+                    or ""
+                )
+
+    if call_log_name and not frappe.db.exists(
+        CRM_CALL_LOG_DOCTYPE,
+        call_log_name,
+    ):
+        call_log_name = (
+            frappe.db.get_value(
+                CRM_CALL_LOG_DOCTYPE,
+                {"id": call_log_name},
                 "name",
             )
             or ""
@@ -666,6 +778,8 @@ def get_call_ai_details(
 
     return {
         "name": doc.name,
+        "external_call_id": get_value("id"),
+        "recording_url": get_value("recording_url"),
         "status": get_value("custom_ai_status"),
         "summary": get_value("custom_ai_summary"),
         "transcript": get_value("custom_transcript"),
@@ -695,5 +809,11 @@ def get_call_ai_details(
         ),
         "error_message": get_value(
             "custom_error_message"
+        ),
+        "retry_count": get_value(
+            "custom_retry_count"
+        ),
+        "raw_ai_result": get_value(
+            "custom_raw_ai_result"
         ),
     }

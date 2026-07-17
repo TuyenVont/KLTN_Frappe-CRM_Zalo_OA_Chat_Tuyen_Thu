@@ -37,3 +37,11 @@ override_whitelisted_methods = {
 after_request = [
     "zalo_oa_crm.crm_injector.inject_crm_assets",
 ]
+fixtures = [
+    {
+        "dt": "Custom Field",
+        "filters": [
+            ["dt", "=", "CRM Call Log"],
+        ],
+    },
+]
