@@ -1,0 +1,82 @@
+{
+  "actions": [],
+  "allow_rename": 0,
+  "creation": "2026-07-20 00:00:00.000000",
+  "doctype": "DocType",
+  "engine": "InnoDB",
+  "field_order": [
+    "stale_deal_days",
+    "closing_soon_days",
+    "high_value_threshold",
+    "report_currency",
+    "show_employee_ranking",
+    "show_forecast"
+  ],
+  "fields": [
+    {
+      "default": "7",
+      "fieldname": "stale_deal_days",
+      "fieldtype": "Int",
+      "label": "Stale Deal Days",
+      "reqd": 1
+    },
+    {
+      "default": "7",
+      "fieldname": "closing_soon_days",
+      "fieldtype": "Int",
+      "label": "Closing Soon Days",
+      "reqd": 1
+    },
+    {
+      "default": "0",
+      "fieldname": "high_value_threshold",
+      "fieldtype": "Currency",
+      "label": "High Value Threshold"
+    },
+    {
+      "default": "VND",
+      "fieldname": "report_currency",
+      "fieldtype": "Data",
+      "label": "Report Currency",
+      "reqd": 1
+    },
+    {
+      "default": "1",
+      "fieldname": "show_employee_ranking",
+      "fieldtype": "Check",
+      "label": "Show Employee Ranking"
+    },
+    {
+      "default": "1",
+      "fieldname": "show_forecast",
+      "fieldtype": "Check",
+      "label": "Show Forecast"
+    }
+  ],
+  "index_web_pages_for_search": 1,
+  "issingle": 1,
+  "links": [],
+  "modified": "2026-07-20 00:00:00.000000",
+  "modified_by": "Administrator",
+  "module": "CRM Reports",
+  "name": "CRM Reports Settings",
+  "owner": "Administrator",
+  "permissions": [
+    {
+      "create": 1,
+      "delete": 1,
+      "email": 1,
+      "export": 1,
+      "print": 1,
+      "read": 1,
+      "report": 1,
+      "role": "System Manager",
+      "share": 1,
+      "write": 1
+    }
+  ],
+  "sort_field": "modified",
+  "sort_order": "DESC",
+  "states": [],
+  "track_changes": 1
+}
